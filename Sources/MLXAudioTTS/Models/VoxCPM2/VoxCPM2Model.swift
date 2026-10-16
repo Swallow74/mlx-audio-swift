@@ -254,6 +254,10 @@ public final class VoxCPM2Model: Module, SpeechGenerationModel, @unchecked Senda
 
     // MARK: - Generation
 
+    /// Generate audio through the standard `SpeechGenerationModel` API.
+    ///
+    /// Uses the diffusion settings from the model config (`inference_timesteps`,
+    /// `cfg_scale`); use the `voxParameters:` overload to tune them.
     public func generate(
         text: String,
         voice: String?,
@@ -262,10 +266,37 @@ public final class VoxCPM2Model: Module, SpeechGenerationModel, @unchecked Senda
         language: String?,
         generationParameters: GenerateParameters
     ) async throws -> sending MLXArray {
+        try await generate(
+            text: text,
+            voice: voice,
+            refAudio: refAudio,
+            refText: refText,
+            language: language,
+            generationParameters: generationParameters,
+            voxParameters: VoxCPM2GenerateParameters()
+        )
+    }
+
+    /// Generate audio with VoxCPM2-specific diffusion settings.
+    ///
+    /// - Parameter voxParameters: diffusion step count, CFG scale and optional
+    ///   seed. Unset fields fall back to the model config.
+    public func generate(
+        text: String,
+        voice: String? = nil,
+        refAudio: sending MLXArray? = nil,
+        refText: String? = nil,
+        language: String? = nil,
+        generationParameters: GenerateParameters,
+        voxParameters: VoxCPM2GenerateParameters
+    ) async throws -> sending MLXArray {
         let maxTokens = generationParameters.maxTokens ?? config.maxLength
         let minTokens = 2
-        let inferenceTimesteps = config.inferenceTimesteps
-        let cfgValue = config.cfgScale
+        let inferenceTimesteps = voxParameters.inferenceTimesteps ?? config.inferenceTimesteps
+        let cfgValue = voxParameters.cfgValue ?? config.cfgScale
+        if let seed = voxParameters.seed {
+            MLXRandom.seed(seed)
+        }
 
         let scaleEmb = Float(config.lmConfig.useMup ? config.lmConfig.scaleEmb : 1)
         let latentDim = audioVAE.latentDim
@@ -415,6 +446,7 @@ public final class VoxCPM2Model: Module, SpeechGenerationModel, @unchecked Senda
         return audio
     }
 
+    /// Stream audio through the standard `SpeechGenerationModel` API.
     public func generateStream(
         text: String,
         voice: String?,
@@ -422,6 +454,30 @@ public final class VoxCPM2Model: Module, SpeechGenerationModel, @unchecked Senda
         refText: String?,
         language: String?,
         generationParameters: GenerateParameters
+    ) -> sending AsyncThrowingStream<AudioGeneration, Error> {
+        generateStream(
+            text: text,
+            voice: voice,
+            refAudio: refAudio,
+            refText: refText,
+            language: language,
+            generationParameters: generationParameters,
+            voxParameters: VoxCPM2GenerateParameters()
+        )
+    }
+
+    /// Streaming variant with VoxCPM2-specific diffusion settings.
+    ///
+    /// VoxCPM2 decodes an utterance in one piece, so this yields a single
+    /// `.audio` element: nothing arrives until generation has finished.
+    public func generateStream(
+        text: String,
+        voice: String? = nil,
+        refAudio: sending MLXArray? = nil,
+        refText: String? = nil,
+        language: String? = nil,
+        generationParameters: GenerateParameters,
+        voxParameters: VoxCPM2GenerateParameters
     ) -> sending AsyncThrowingStream<AudioGeneration, Error> {
         let refAudio = SendingBox(refAudio)
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
@@ -436,7 +492,8 @@ public final class VoxCPM2Model: Module, SpeechGenerationModel, @unchecked Senda
                 let audio = try await self.generate(
                     text: text, voice: voice, refAudio: refAudio.take(),
                     refText: refText, language: language,
-                    generationParameters: generationParameters
+                    generationParameters: generationParameters,
+                    voxParameters: voxParameters
                 )
                 let generateTime = Date().timeIntervalSince(startTime)
 
